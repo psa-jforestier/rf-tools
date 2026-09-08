@@ -31,7 +31,7 @@
 // The Star Météo protocol was rebuilt based on multiple observations, tests
 // and team discussions with multiple people (ChrisJ, Jaymore, JeffHxC, obones, ...)
 // on the TetraHub Forum, the largest French language online community and discussion
-// board dedicated to radiocommunications, radio scanning, and digital radio systems
+// board dedicated to radiocommunications, radio scanning, and digital radio systems.
 //
 // Discussion starting point : https://forum.tetrahub.net/post91796.html#p91796
 //
@@ -198,6 +198,8 @@
 //
 //    PICTO_CODE_LOW_X <= picto_id(3 downto 0)
 //
+//    For more details about the "PICTO_CODE" meaning, see the below "forecast_pictos" definition.
+//
 // LOW_CHECKSUM quartet encoding :
 //
 //    LOW_CHECKSUM <= 0x7 + sum of all previous quartets (from quartet [LOW_TEMP_HIGH_BCD] to [PICTO_CODE_LOW_5])
@@ -206,8 +208,45 @@
 //
 // RAIN_PROBABILITY_BLOCK :
 //
-// TODO
+// Contains the rains probability for six days
 //
+// |[?][?][PROBABILITY][?][?]|*6  [HIGH_CHECKSUM][LOW_CHECKSUM][0x0][0xB]
+//
+// PROBABILITY quartet encoding : 0x0<>0xE, 5% step
+//
+// HIGH_CHECKSUM quartet encoding :
+//
+//    HIGH_CHECKSUM <= (0x7 + sum of all previous quartets (from quartet [0x3] to [0xE]))(7 downto 4)
+//
+// LOW_CHECKSUM quartet encoding :
+//
+//    LOW_CHECKSUM  <= (0x7 + sum of all previous quartets (from quartet [0x3] to [0xE]))(3 downto 0)
+//
+// ----
+//
+// ALERT_BLOCK:
+//
+// (Frame transmitted separatly some minutes after the main forecast frame with the "ALERT" quartet set)
+//
+// [0xE][0xA][ELEMENTS_COUNT][0x7] ([?][ALERT_LEVEL][ALERT_MESSAGE_CODE])*ELEMENTS_COUNT [HIGH_CHECKSUM][LOW_CHECKSUM][0xB]
+//
+// ALERT_LEVEL quartet encoding :
+//   - 0 : Green Alert (Do nothing)
+//   - 1 : Yellow Alert
+//   - 2 : Orange Alert
+//   - 3 : Red Alert
+//
+// For more details about the "ALERT_MESSAGE_CODE" meaning, see the below "alert_msgs" definition.
+//
+// HIGH_CHECKSUM quartet encoding :
+//
+//    HIGH_CHECKSUM <= (0x7 + sum of all previous quartets (from quartet [0xE] to the last "ALERT_MESSAGE_CODE" quartet))(7 downto 4)
+//
+// LOW_CHECKSUM quartet encoding :
+//
+//    LOW_CHECKSUM  <= (0x7 + sum of all previous quartets (from quartet [0xE] to the last "ALERT_MESSAGE_CODE" quartet))(3 downto 0)
+//
+// ----
 
 #include <errno.h>
 #include <stdio.h>
@@ -233,6 +272,170 @@ typedef struct frame_
 	int quartets_cnt;
 }frame;
 
+typedef struct alert_message_
+{
+	unsigned int code;
+	unsigned int level;
+	char * message;
+}alert_message;
+
+typedef struct forecast_picto_
+{
+	unsigned int picto_id;
+	unsigned int message_id;
+	char * message;
+}forecast_picto;
+
+const forecast_picto forecast_pictos[]=
+{
+	{0x00,0x00,"ENSOLEILLE"},
+	{0x01,0x00,"GENERALEMENT ENSOLEILLE"},
+	{0x01,0x01,"EN PARTIE BRUMEUX"},
+	{0x02,0x00,"NUAGEUX A COUVERT"},
+	{0x03,0x00,"COUVERT"},
+	{0x03,0x02,"BRUMEUX"},
+	{0x04,0x00,"NUAGEUX, ONDEES"},
+	{0x04,0x01,"NUAGEUX, CRACHIN VERGLACANT"},
+	{0x04,0x02,"NUAGEUX, AVERSES EPARSES"},
+	{0x04,0x03,"NUAGEUX, GIBOULEES DE NEIGE EPARSES"},
+	{0x05,0x00,"NUAGEUX, PLUIE"},
+	{0x05,0x01,"NUAGEUX, PLUIES VERGLACANTES"},
+	{0x05,0x02,"NUAGEUX, AVERSES"},
+	{0x05,0x03,"NUAGEUX, GIBOULEES DE NEIGE"},
+	{0x06,0x00,"NUAGEUX, AVERSES ABONDANTES"},
+	{0x06,0x01,"NUAGEUX, FORTES AVERSES"},
+	{0x06,0x02,"NUAGEUX, ABONDANTES PLUIES NEIGEUSES"},
+	{0x06,0x03,"NUAGEUX, FORTES GIBOULEES DE NEIGE"},
+	{0x07,0x00,"NUAGEUX A COUVERT, QUELQUES ONDEES"},
+	{0x07,0x01,"NUAGEUX A COUVERT, AVERSES EPARSES"},
+	{0x07,0x02,"NUAGEUX A COUVERT, FAIBLES PLUIES NEIGEUSES"},
+	{0x07,0x03,"NUAGEUX A COUVERT, GIBOULEES DE NEIGE EPARSES"},
+	{0x08,0x00,"NUAGEUX A COUVERT, PLUIE"},
+	{0x08,0x01,"NUAGEUX A COUVERT, AVERSES"},
+	{0x08,0x02,"NUAGEUX A COUVERT, PLUIES NEIGEUSES"},
+	{0x08,0x03,"NUAGEUX A COUVERT, GIBOULEES DE NEIGE"},
+	{0x09,0x00,"NUAGEUX A COUVERT, AVERSES ABONDANTES"},
+	{0x09,0x01,"NUAGEUX A COUVERT, FORTES AVERSES"},
+	{0x09,0x02,"NUAGEUX A COUVERT, ABONDANTES PLUIES NEIGEUSES"},
+	{0x09,0x03,"NUAGEUX A COUVERT, FORTES GIBOULEES DE NEIGE"},
+	{0x0A,0x00,"NUAGEUX, AVERSES EPARSES AVEC ORAGES"},
+	{0x0A,0x01,"COUVERT, AVERSES EPARSES AVEC ORAGES"},
+	{0x0A,0x02,"NUAGEUX, AVERSES EPARSES AVEC ORAGES"},
+	{0x0A,0x03,"COUVERT, AVERSES EPARSES AVEC ORAGES"},
+	{0x0B,0x00,"NUAGEUX, AVERSES AVEC ORAGES"},
+	{0x0B,0x01,"COUVERT, AVERSES AVEC ORAGES"},
+	{0x0B,0x02,"NUAGEUX, AVERSES AVEC ORAGES"},
+	{0x0B,0x03,"COUVERT, AVERSES AVEC ORAGES"},
+	{0x0C,0x00,"NUAGEUX, FORTES AVERSES AVEC ORAGES"},
+	{0x0C,0x01,"COUVERT, FORTES AVERSES AVEC ORAGES"},
+	{0x0C,0x02,"NUAGEUX, FORTES AVERSES AVEC ORAGES"},
+	{0x0C,0x03,"COUVERT, FORTES AVERSES AVEC ORAGES"},
+	{0x0D,0x00,"NUAGEUX A COUVERT, AVERSES EPARSES AVEC ORAGES"},
+	{0x0E,0x00,"NUAGEUX A COUVERT, AVERSES AVEC ORAGES"},
+	{0x0F,0x00,"NUAGEUX A COUVERT, FORTES AVERSES AVEC ORAGES"},
+	{0x10,0x00,"NUAGEUX, FAIBLES CHUTES DE NEIGE"},
+	{0x10,0x01,"COUVERT, FAIBLES CHUTES DE NEIGE"},
+	{0x10,0x02,"NUAGEUX, AVERSES DE NEIGE EPARSES"},
+	{0x10,0x03,"COUVERT, AVERSES DE NEIGE EPARSES"},
+	{0x11,0x00,"NUAGEUX, CHUTES DE NEIGE"},
+	{0x11,0x01,"NUAGEUX, CHUTES DE NEIGE"},
+	{0x11,0x02,"NUAGEUX, ABONDANTES CHUTES DE NEIGE"},
+	{0x11,0x03,"NUAGEUX, FORTES AVERSES DE NEIGE"},
+	{0x12,0x00,"NUAGEUX A COUVERT, FAIBLES CHUTES DE NEIGE"},
+	{0x12,0x01,"NUAGEUX A COUVERT, AVERSES DE NEIGE EPARSES"},
+	{0x12,0x02,"NUAGEUX A COUVERT, ABONDANTES CHUTES DE NEIGE"},
+	{0x12,0x03,"NUAGEUX A COUVERT, ABONDANTES AVERSES DE NEIGE"},
+	{0x13,0x00,"NUAGEUX A COUVERT, CHUTES DE NEIGE"},
+	{0x13,0x01,"NUAGEUX A COUVERT, AVERSES DE NEIGE"},
+	{0x13,0x03,"COUVERT, TEMPETE DE NEIGE"},
+	{0x14,0x00,"NUAGEUX, TEMPETE DE NEIGE"},
+	{0x14,0x01,"COUVERT, TEMPETE DE NEIGE"},
+	{0x14,0x02,"NUAGEUX, TEMPETE DE NEIGE"},
+	{0x14,0x03,"COUVERT, TEMPETE DE NEIGE"},
+	{0x15,0x00,"NUAGEUX, TEMPETE DE NEIGE"},
+	{0x15,0x01,"COUVERT, TEMPETE DE NEIGE"},
+	{0x16,0x00,"NUAGEUX A COUVERT, TEMPETE DE NEIGE"},
+	{0x17,0x00,"NUAGEUX A COUVERT, TEMPETE DE NEIGE"},
+	{0x18,0x00,"CIEL DEGAGE"},
+	{0x19,0x00,"NUAGES EPARS"},
+	{0x19,0x01,"EN PARTIE BRUMEUX"},
+	{0x19,0x02,"NUAGEUX A COUVERT"},
+	{0x1A,0x00,"NUAGEUX A COUVERT, PLUIES EPARSES"},
+	{0x1A,0x01,"NUAGEUX A COUVERT, AVERSES EPARSES"},
+	{0x1A,0x02,"NUAGEUX A COUVERT, FAIBLES PLUIES NEIGEUSES"},
+	{0x1A,0x03,"NUAGEUX A COUVERT, GIBOULEES DE NEIGE EPARSES"},
+	{0x1B,0x00,"NUAGEUX A COUVERT, PLUIE"},
+	{0x1B,0x01,"NUAGEUX A COUVERT, AVERSES"},
+	{0x1B,0x02,"NUAGEUX A COUVERT, PLUIES NEIGEUSES"},
+	{0x1B,0x03,"NUAGEUX A COUVERT, GIBOULEES DE NEIGE"},
+	{0x1C,0x00,"NUAGEUX A COUVERT, PLUIES ABONDANTES"},
+	{0x1C,0x01,"NUAGEUX A COUVERT, FORTES PLUIES"},
+	{0x1C,0x02,"NUAGEUX A COUVERT, ABONDANTES PLUIES NEIGEUSES"},
+	{0x1C,0x03,"NUAGEUX A COUVERT, FORTES GIBOULEES DE NEIGE"},
+	{0x1D,0x00,"NUAGEUX A COUVERT, AVERSES EPARSES AVEC ORAGES"},
+	{0x1E,0x00,"NUAGEUX A COUVERT, AVERSES AVEC ORAGES"},
+	{0x1F,0x00,"NUAGEUX A COUVERT, FORTES AVERSES AVEC ORAGES"},
+	{0x20,0x00,"NUAGEUX A COUVERT, FAIBLES CHUTES DE NEIGE"},
+	{0x20,0x01,"NUAGEUX A COUVERT, GIBOULEES DE NEIGE EPARSES"},
+	{0x21,0x00,"NUAGEUX A COUVERT, CHUTES DE NEIGE"},
+	{0x21,0x01,"NUAGEUX A COUVERT, PLUIES NEIGEUSES"},
+	{0x21,0x02,"NUAGEUX A COUVERT, ABONDANTES CHUTES DE NEIGE"},
+	{0x21,0x03,"NUAGEUX A COUVERT, FORTES AVERSES DE NEIGE"},
+	{0x22,0x00,"NUAGEUX A COUVERT, TEMPETE DE NEIGE"},
+	{0x23,0x00,"NUAGEUX A COUVERT, TEMPETE DE NEIGE"}
+};
+
+const alert_message alert_msgs[]=
+{
+	{0x01,2,"ATTENTION AUX VENTS FORTS"},
+	{0x01,3,"VENTS TRES VIOLENTS"},
+	{0x02,2,"PLUIES ET RISQUES D’INONDATION"},
+	{0x02,3,"FORTES PLUIES ET CRUES PROBABLES"},
+	{0x03,2,"ORAGES FORTS"},
+	{0x03,3,"ORAGES TRES VIOLENTS"},
+	{0x04,2,"NEIGE ET VERGLAS = SOYEZ PRUDENTS SUR LES ROUTES"},
+	{0x04,3,"CHUTE DE NEIGE ET VERGLAS = EVITEZ LES DEPLACEMENTS"},
+	{0x05,2,"ATTENTION, SITUATION DE CANICULE"},
+	{0x05,3,"ATTENTION FORTE CANICULE"},
+	{0x06,2,"ZONE DE GRAND FROID ANNONCEE"},
+	{0x06,3,"TRES GRAND FROID – EVITEZ LES SORTIES"},
+	{0x07,2,"AVALANCHES"},
+	{0x07,3,"RISQUE TRES FORT D’AVALANCHES"},
+	{0x08,2,""},
+	{0x08,3,""},
+	{0x09,2,"SITUATION DE CANICULE AVEC ORAGES"},
+	{0x09,3,"ATTENTION FORTE CANICULE - ORAGES VIOLENTS"},
+	{0x0A,2,"SITUATION DE CANICULE – VENTS FORTS A PREVOIR"},
+	{0x0A,3,"ATTENTION FORTE CANICULE – VENTS VIOLENTS ANNONCES"},
+	{0x0B,2,"SITUATION DE CANICULE – PLUIE ET INONDATIONS POSSIBLES"},
+	{0x0B,3,"ATTENTION FORTE CANICULE – PLUIE ET INONDATIONS"},
+	{0x0C,2,"GRAND FROID – VENTS FORTS A PREVOIR"},
+	{0x0C,3,"ATTENTION GRAND FROID – VENTS VIOLENTS"},
+	{0x0D,2,"GRAND FROID – AVEC PLUIE ET INONDATIONS PROBABLES"},
+	{0x0D,3,"ATTENTION GRAND FROID – PLUIE ET INONDATIONS PROBABLES"},
+	{0x0E,2,"GRAND FROID – NEIGE ET VERGLAS – LIMITEZ VOS DEPLACEMENTS"},
+	{0x0E,3,"ATTENTION GRAND FROID – NEIGE ET VERGLAS ABONDANTS – EVITEZ LES DEPLACEMENTS"},
+	{0x0F,2,"GRAND FROID – AVALANCHES PROBABLES"},
+	{0x0F,3,"ATTENTION GRAND FROID – AVALANCHES"},
+	{0x10,2,"GRAND FROID – ORAGES VIOLENTS - LIMITEZ VOS SORTIES"},
+	{0x10,3,"ATTENTION GRAND FROID – ORAGES TRES VIOLENTS"},
+	{0x11,2,"AVALANCHES – VENTS FORTS A PREVOIR"},
+	{0x11,3,"AVALANCHES ET VENTS TRES FORTS - DANGER"},
+	{0x12,2,"AVALANCHES – AVEC PLUIE ET INONDATIONS"},
+	{0x12,3,"AVALANCHES – PLUIE ET INONDATIONS - DANGER"},
+	{0x13,2,"AVALANCHES - NEIGE ET VERGLAS – LIMITEZ VOS DEPLACEMENTS"},
+	{0x13,3,"AVALANCHES - NEIGE ET VERGLAS – EVITEZ LES DEPLACEMENTS"},
+	{0x14,2,"AVALANCHES – ORAGES VIOLENTS - LIMITEZ VOS SORTIES"},
+	{0x14,3,"AVALANCHES – ORAGES VIOLENTS – NE SORTEZ QU’EN CAS DE NECESSITE"},
+	{0x15,2,"GRAND FROID – VENTS FORTS A PREVOIR ET AVALANCHES"},
+	{0x15,3,"ATTENTION, GRAND FROID – VENTS FORTS A PREVOIR ET AVALANCHES"},
+	{0x16,2,"GRAND FROID, NEIGE ET VERGLAS AVEC DES AVALANCHES"},
+	{0x16,3,"ATTENTION, GRAND FROID, NEIGE ET VERGLAS AVEC DES AVALANCHES"},
+	{0x17,2,"GRAND FROID, AVEC ORAGES FORTS ET AVALANCHES"},
+	{0x17,3,"ATTENTION, GRAND FROID, AVEC ORAGES FORTS ET AVALANCHES"},
+	{0x18,2,"GRAND FROID, PLUIE INONDATIONS ET AVALANCHES"},
+	{0x18,3,"ATTENTION, GRAND FROID, PLUIE INONDATIONS ET AVALANCHES"}
+};
 
 void printbin(uint32_t val,int bitcnt)
 {
@@ -912,14 +1115,53 @@ int main(int argc, char* argv[])
 						if(idx < genfrm[b].quartets_cnt)
 						{
 							ck = 0;
-							printf("Extra quartet(s) : ");
-							while( idx < genfrm[b].quartets_cnt )
+							int str_idx = idx;
+							if( genfrm[b].quartetfrm[0] == 0x0 )
 							{
-								printf("%X",genfrm[b].quartetfrm[idx]);
-								ck += genfrm[b].quartetfrm[idx];
-								idx++;
+								for(i=0;i<6;i++)
+								{
+									if(verbose)
+									{
+										printf("(");
+										for(int t=0;t<5;t++)
+										{
+											printf("%X",genfrm[b].quartetfrm[idx + t]);
+										}
+										printf(") ");
+									}
+
+									printf("Rain Day N+%d : %d %c, ", i, genfrm[b].quartetfrm[idx + 2] * 5, '%' );
+									idx += 5;
+								}
+								
+								sum = 7;
+								for(i = str_idx; i < str_idx + 6*5;i++)
+								{
+									sum += genfrm[b].quartetfrm[i];
+								}
+								
+								if( (sum&0xFF) == ( (genfrm[b].quartetfrm[i]<<4) | genfrm[b].quartetfrm[i+1] ) )
+								{
+									printf(" (Valid checksum)") ;
+								}
+								else
+								{
+									printf(" (Bad checksum)  ");
+								}
+
+								printf("\n");
 							}
-							printf("\n ck:%x\n",ck);
+							else
+							{
+								printf("Extra quartet(s) : ");
+								while( idx < genfrm[b].quartets_cnt )
+								{
+									printf("%X",genfrm[b].quartetfrm[idx]);
+									ck += genfrm[b].quartetfrm[idx];
+									idx++;
+								}
+								printf("\n ck:%x\n",ck);
+							}
 						}
 
 					break;
